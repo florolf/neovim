@@ -1210,6 +1210,12 @@ static void unibi_goto(UI *ui, int row, int col)
   unibi_out(ui, unibi_cursor_address);
 }
 
+struct limited_out_ctx {
+	UI *ui;
+	bool overflow;
+	size_t n;
+};
+
 #define UNIBI_OUT(fn) \
   do { \
     TUIData *data = ui->data; \
@@ -1219,8 +1225,22 @@ static void unibi_goto(UI *ui, int row, int col)
     } \
     if (str) { \
       unibi_var_t vars[26 + 26]; \
+      struct limited_out_ctx ctx = { \
+        .ui = ui, \
+        .n = 0, \
+        .overflow = false, \
+      }; \
+      \
       memset(&vars, 0, sizeof(vars)); \
-      unibi_format(vars, vars + 26, str, data->params, out, ui, NULL, NULL); \
+      unibi_format(vars, vars + 26, str, data->params, limited_out, &ctx, NULL, NULL); \
+      if (ctx.overflow) { \
+        data->bufpos -= ctx.n; \
+        flush_buf(ui, true); \
+        \
+        ctx.n = 0; \
+        ctx.overflow = false; \
+        unibi_format(vars, vars + 26, str, data->params, limited_out, &ctx, NULL, NULL); \
+      } \
     } \
   } while (0)
 static void unibi_out(UI *ui, int unibi_index)
@@ -1245,6 +1265,27 @@ static void out(void *ctx, const char *str, size_t len)
 
   memcpy(data->buf + data->bufpos, str, len);
   data->bufpos += len;
+}
+
+static void limited_out(void *ctx, const char *str, size_t len)
+{
+  struct limited_out_ctx *out_ctx = ctx;
+  UI *ui = out_ctx->ui;
+  TUIData *data = ui->data;
+  size_t available = sizeof(data->buf) - data->bufpos;
+
+  if (out_ctx->overflow) {
+    return;
+  }
+
+  if (len > available) {
+    out_ctx->overflow = true;
+    return;
+  }
+
+  memcpy(data->buf + data->bufpos, str, len);
+  data->bufpos += len;
+  out_ctx->n += len;
 }
 
 static void unibi_set_if_empty(unibi_term *ut, enum unibi_string str,
